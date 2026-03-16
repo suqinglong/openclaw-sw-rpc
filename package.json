@@ -1,0 +1,27 @@
+{
+  "name": "openclaw-ws-rpc",
+  "version": "1.0.0",
+  "description": "OpenClaw WebSocket RPC client library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "node dist/test.js"
+  },
+  "keywords": [
+    "openclaw",
+    "websocket",
+    "rpc"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.0.0"
+  }
+}
