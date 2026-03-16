@@ -8,16 +8,23 @@ async function main() {
   console.log('  2. Or the device must be pre-paired via the Web UI');
   console.log('');
 
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN;
+  
   const client = new OpenClawGatewayClient({
     host: '127.0.0.1',
     port: 18789,
-    // Set the token if Gateway is configured with OPENCLAW_GATEWAY_TOKEN
-    token: 'clawx-993a437d1a9ae925eef900a0b2e11e3e',
+    // Set the token from OPENCLAW_GATEWAY environment variable
+    token: token,
     timeout: 30000,
     reconnect: true,
     reconnectInterval: 5000,
     maxReconnectAttempts: 10,
   });
+  
+  if (!token) {
+    console.warn('WARNING: OPENCLAW_GATEWAY_TOKEN environment variable not set');
+    console.warn('Using device authentication instead (requires pre-pairing)');
+  }
 
   try {
     await client.connect();
