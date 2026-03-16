@@ -8,9 +8,19 @@ import type {
   CronJob,
   SessionInfo,
 } from './types';
+import {
+  loadOrCreateDeviceIdentity,
+  buildDeviceAuthPayload,
+  signDevicePayload,
+  publicKeyRawBase64UrlFromPem,
+  type DeviceIdentity,
+} from './device-identity';
+import path from 'path';
+import os from 'os';
 
 export class OpenClawGatewayClient {
   private ws: WebSocket | null = null;
+  private host: string;
   private port: number;
   private token?: string;
   private timeout: number;
@@ -22,8 +32,10 @@ export class OpenClawGatewayClient {
   private connected: boolean = false;
   private handshakeComplete: boolean = false;
   private messageId: number = 0;
+  private deviceIdentity: DeviceIdentity | null = null;
 
   constructor(options: GatewayClientOptions) {
+    this.host = options.host ?? '127.0.0.1';
     this.port = options.port;
     this.token = options.token;
     this.timeout = options.timeout ?? 30000;
@@ -32,8 +44,17 @@ export class OpenClawGatewayClient {
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
   }
 
+  private async ensureDeviceIdentity(): Promise<DeviceIdentity> {
+    if (!this.deviceIdentity) {
+      // Load from OpenClaw's standard device identity location
+      const identityPath = path.join(process.env.HOME || process.env.USERPROFILE || '/', '.openclaw', 'identity', 'device.json');
+      this.deviceIdentity = await loadOrCreateDeviceIdentity(identityPath);
+    }
+    return this.deviceIdentity;
+  }
+
   async connect(): Promise<void> {
-    const wsUrl = `ws://localhost:${this.port}/ws`;
+    const wsUrl = `ws://${this.host}:${this.port}/ws`;
     console.log(`Connecting to OpenClaw Gateway at ${wsUrl}`);
 
     return new Promise<void>((resolve, reject) => {
@@ -60,54 +81,99 @@ export class OpenClawGatewayClient {
         reject(error);
       };
 
-      const sendConnectHandshake = (challengeNonce: string) => {
+      const sendConnectHandshake = async (challengeNonce: string) => {
         console.log('Sending connect handshake');
         const connectId = this.generateMessageId();
-        const connectMessage: GatewayMessage = {
-          type: 'req',
-          id: connectId,
-          method: 'connect',
-          params: {
-            minProtocol:3,
-            maxProtocol: 3,
-            client: {
-              id: 'openclaw-ws-rpc',
-              displayName: 'OpenClaw WS RPC Client',
-              version: '1.0.0',
-              platform: process.platform,
-              mode: 'cli',
+        
+        try {
+          const clientId = 'gateway-client';
+          const clientMode = 'backend';
+          const role = 'operator';
+          const scopes = ['operator.admin'];
+
+          // Build base connect message
+          const connectMessage: GatewayMessage = {
+            type: 'req',
+            id: connectId,
+            method: 'connect',
+            params: {
+              minProtocol: 3,
+              maxProtocol: 3,
+              client: {
+                id: clientId,
+                displayName: 'OpenClaw WS RPC Client',
+                version: '1.0.0',
+                platform: process.platform,
+                deviceFamily: process.platform,
+                mode: clientMode,
+              },
+              auth: this.token ? { token: this.token } : {},
+              caps: [],
+              role: role,
+              scopes: scopes,
             },
-            auth: this.token ? { token: this.token } : {},
-            caps: [],
-            role: 'operator',
-            scopes: ['operator.admin'],
-          },
-        };
+          };
 
-        if (this.ws) {
-          this.ws.send(JSON.stringify(connectMessage));
-        }
+          // Only include device info when not using token auth
+          // Device auth requires pre-pairing with the gateway
+          if (!this.token) {
+            const deviceIdentity = await this.ensureDeviceIdentity();
+            const signedAtMs = Date.now();
 
-        const requestTimeout = setTimeout(() => {
-          if (!this.handshakeComplete) {
-            rejectOnce(new Error('Connect handshake timeout'));
-            this.ws?.close();
+            const payload = buildDeviceAuthPayload({
+              deviceId: deviceIdentity.deviceId,
+              clientId: clientId,
+              clientMode: clientMode,
+              role: role,
+              scopes: scopes,
+              signedAtMs: signedAtMs,
+              token: undefined,
+              nonce: challengeNonce,
+              platform: process.platform,
+              deviceFamily: process.platform,
+            });
+
+            const signature = signDevicePayload(deviceIdentity.privateKeyPem, payload);
+            const publicKey = publicKeyRawBase64UrlFromPem(deviceIdentity.publicKeyPem);
+
+            if (connectMessage.params) {
+              connectMessage.params.device = {
+                id: deviceIdentity.deviceId,
+                publicKey: publicKey,
+                signature: signature,
+                signedAt: signedAtMs,
+                nonce: challengeNonce,
+              };
+            }
           }
-        }, this.timeout);
 
-        this.pendingRequests.set(connectId, {
-          resolve: () => {
-            this.handshakeComplete = true;
-            this.connected = true;
-            this.reconnectAttempts = 0;
-            console.log('Connected to OpenClaw Gateway');
-            resolveOnce();
-          },
-          reject: (error) => {
-            rejectOnce(error);
-          },
-          timeout: requestTimeout,
-        });
+          if (this.ws) {
+            this.ws.send(JSON.stringify(connectMessage));
+          }
+
+          const requestTimeout = setTimeout(() => {
+            if (!this.handshakeComplete) {
+              rejectOnce(new Error('Connect handshake timeout'));
+              this.ws?.close();
+            }
+          }, this.timeout);
+
+          this.pendingRequests.set(connectId, {
+            resolve: () => {
+              this.handshakeComplete = true;
+              this.connected = true;
+              this.reconnectAttempts = 0;
+              console.log('Connected to OpenClaw Gateway');
+              resolveOnce();
+            },
+            reject: (error) => {
+              rejectOnce(error);
+            },
+            timeout: requestTimeout,
+          });
+        } catch (error) {
+          rejectOnce(error as Error);
+        }
       };
 
       const challengeTimeout = setTimeout(() => {

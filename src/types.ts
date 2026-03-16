@@ -42,6 +42,7 @@ export interface DeviceInfo {
 }
 
 export interface GatewayClientOptions {
+  host?: string;
   port: number;
   token?: string;
   timeout?: number;
