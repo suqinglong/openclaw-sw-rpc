@@ -1,0 +1,1 @@
+export const identityPath = '/home/admin/.openclaw/identity/device.json';

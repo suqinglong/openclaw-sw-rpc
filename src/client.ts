@@ -17,6 +17,9 @@ import {
 } from './device-identity';
 import path from 'path';
 import os from 'os';
+import { identityPath } from './const';
+
+
 
 export class OpenClawGatewayClient {
   private ws: WebSocket | null = null;
@@ -47,7 +50,6 @@ export class OpenClawGatewayClient {
   private async ensureDeviceIdentity(): Promise<DeviceIdentity> {
     if (!this.deviceIdentity) {
       // Load from OpenClaw's standard device identity location
-      const identityPath = path.join(process.env.HOME || process.env.USERPROFILE || '/', '.openclaw', 'identity', 'device.json');
       this.deviceIdentity = await loadOrCreateDeviceIdentity(identityPath);
     }
     return this.deviceIdentity;
