@@ -15,10 +15,9 @@ class OpenClawServer {
   private skills: Map<string, Skill> = new Map();
   private clients: WebSocket[] = [];
 
-  constructor(private port: number = 8789) {
+  constructor(private port: number = 8003) {
     this.wss = new WebSocket.Server({ port: this.port });
     this.setupEventListeners();
-    // this.initializeDefaultSkills();
   }
 
   private setupEventListeners(): void {
@@ -41,36 +40,6 @@ class OpenClawServer {
     });
 
     console.log(`OpenClaw Server started on port ${this.port}`);
-  }
-
-  private initializeDefaultSkills(): void {
-    // Add some default skills for testing
-    this.skills.set('pdf', {
-      skillKey: 'pdf',
-      name: 'PDF Processing',
-      description: 'Process and extract information from PDF files',
-      version: '1.0.0',
-      enabled: true,
-      installedAt: Date.now()
-    });
-
-    this.skills.set('xlsx', {
-      skillKey: 'xlsx',
-      name: 'Excel Processing',
-      description: 'Process and extract information from Excel files',
-      version: '1.0.0',
-      enabled: true,
-      installedAt: Date.now()
-    });
-
-    this.skills.set('tavily-search', {
-      skillKey: 'tavily-search',
-      name: 'Tavily Search',
-      description: 'Search the web using Tavily API',
-      version: '1.0.0',
-      enabled: false,
-      installedAt: Date.now()
-    });
   }
 
   private handleMessage(ws: WebSocket, message: WebSocket.RawData): void {
