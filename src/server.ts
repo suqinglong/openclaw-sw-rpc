@@ -1,5 +1,6 @@
 import http from 'http';
 import { SkillsStatusResult, SkillStatus } from './types';
+import { OpenClawGatewayClient } from './client';
 
 interface Skill {
   skillKey: string;
@@ -13,9 +14,15 @@ interface Skill {
 class OpenClawServer {
   private server: http.Server;
   private skills: Map<string, Skill> = new Map();
+  private client: OpenClawGatewayClient;
 
   constructor(private port: number = 8003) {
     this.server = http.createServer(this.handleRequest.bind(this));
+    this.client = new OpenClawGatewayClient({
+      host: '127.0.0.1',
+      port: 18789,
+      timeout: 30000
+    });
     this.setupEventListeners();
   }
 
@@ -54,10 +61,10 @@ class OpenClawServer {
           this.handleConnect(res);
           break;
         case '/skills/list':
-          this.handleSkillsList(res);
+          await this.handleSkillsList(res);
           break;
         case '/skills/status':
-          this.handleSkillsStatus(res, params);
+          await this.handleSkillsStatus(res, params);
           break;
         case '/skills/install':
           this.handleSkillsInstall(res, params);
@@ -69,7 +76,7 @@ class OpenClawServer {
           this.handleSkillsUpdate(res, params);
           break;
         case '/gateway/status':
-          this.handleGatewayStatus(res);
+          await this.handleGatewayStatus(res);
           break;
         default:
           this.sendError(res, 'UNKNOWN_METHOD', `Path ${path} not supported`, 404);
@@ -107,31 +114,43 @@ class OpenClawServer {
     res.end(JSON.stringify(response));
   }
 
-  private handleSkillsList(res: http.ServerResponse): void {
-    const skillsList = Array.from(this.skills.values());
-
-    res.writeHead(200);
-    res.end(JSON.stringify(skillsList));
+  private async handleSkillsList(res: http.ServerResponse): Promise<void> {
+    try {
+      if (!this.client || !this.client.isConnected()) {
+        await this.client.connect();
+      }
+      const skillsStatus = await this.client.skillsStatus();
+      // const skillsList = (skillsStatus.skills || []).map(skill => ({
+      //   skillKey: skill.skillKey,
+      //   name: skill.name,
+      //   description: skill.description,
+      //   version: skill.version,
+      //   enabled: !skill.disabled,
+      //   installedAt: Date.now()
+      // }));
+      
+      res.writeHead(200);
+      res.end(JSON.stringify(skillsStatus.skills));
+    } catch (error) {
+      console.error('Error fetching skills:', error);
+      this.sendError(res, 'SKILL_FETCH_ERROR', 'Failed to fetch skills from OpenClaw', 500);
+    }
   }
 
-  private handleSkillsStatus(res: http.ServerResponse, params?: Record<string, unknown>): void {
-    const agentId = params?.agentId as string;
-    
-    const skillsStatus: SkillStatus[] = Array.from(this.skills.values()).map(skill => ({
-      skillKey: skill.skillKey,
-      name: skill.name,
-      description: skill.description,
-      disabled: !skill.enabled,
-      version: skill.version,
-      bundled: false
-    }));
-
-    const result: SkillsStatusResult = {
-      skills: skillsStatus
-    };
-
-    res.writeHead(200);
-    res.end(JSON.stringify(result));
+  private async handleSkillsStatus(res: http.ServerResponse, params?: Record<string, unknown>): Promise<void> {
+    try {
+      if (!this.client || !this.client.isConnected()) {
+        await this.client.connect();
+      }
+      const agentId = params?.agentId as string;
+      const skillsStatus = await this.client.skillsStatus(agentId);
+      
+      res.writeHead(200);
+      res.end(JSON.stringify(skillsStatus));
+    } catch (error) {
+      console.error('Error fetching skills status:', error);
+      this.sendError(res, 'SKILL_STATUS_FETCH_ERROR', 'Failed to fetch skills status from OpenClaw', 500);
+    }
   }
 
   private handleSkillsInstall(res: http.ServerResponse, params?: Record<string, unknown>): void {
@@ -222,16 +241,25 @@ class OpenClawServer {
     res.end(JSON.stringify(response));
   }
 
-  private handleGatewayStatus(res: http.ServerResponse): void {
-    const response = {
-      status: 'ok',
-      version: '1.0.0',
-      uptime: process.uptime(),
-      timestamp: Date.now()
-    };
+  private async handleGatewayStatus(res: http.ServerResponse): Promise<void> {
+    try {
+      if (!this.client || !this.client.isConnected()) {
+        await this.client.connect();
+      }
+      const gatewayStatus = await this.client.gatewayStatus();
+      
+      const response = {
+        ...gatewayStatus,
+        uptime: process.uptime(),
+        timestamp: Date.now()
+      };
 
-    res.writeHead(200);
-    res.end(JSON.stringify(response));
+      res.writeHead(200);
+      res.end(JSON.stringify(response));
+    } catch (error) {
+      console.error('Error fetching gateway status:', error);
+      this.sendError(res, 'GATEWAY_STATUS_FETCH_ERROR', 'Failed to fetch gateway status from OpenClaw', 500);
+    }
   }
 
   private sendError(res: http.ServerResponse, code: string, message: string, statusCode: number = 400): void {
