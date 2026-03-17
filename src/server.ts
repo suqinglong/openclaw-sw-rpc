@@ -1,5 +1,5 @@
-import WebSocket from 'ws';
-import { GatewayMessage, SkillsStatusResult, SkillStatus, SkillsUpdateParams } from './types';
+import http from 'http';
+import { SkillsStatusResult, SkillStatus } from './types';
 
 interface Skill {
   skillKey: string;
@@ -11,116 +11,112 @@ interface Skill {
 }
 
 class OpenClawServer {
-  private wss: WebSocket.Server;
+  private server: http.Server;
   private skills: Map<string, Skill> = new Map();
-  private clients: WebSocket[] = [];
 
   constructor(private port: number = 8003) {
-    this.wss = new WebSocket.Server({ port: this.port });
+    this.server = http.createServer(this.handleRequest.bind(this));
     this.setupEventListeners();
   }
 
   private setupEventListeners(): void {
-    this.wss.on('connection', (ws) => {
-      console.log('Client connected');
-      this.clients.push(ws);
-
-      ws.on('message', (message) => {
-        this.handleMessage(ws, message);
-      });
-
-      ws.on('close', () => {
-        console.log('Client disconnected');
-        this.clients = this.clients.filter(client => client !== ws);
-      });
-
-      ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
-      });
+    this.server.listen(this.port, '0.0.0.0', () => {
+      console.log(`OpenClaw HTTP Server started on port ${this.port}`);
     });
 
-    console.log(`OpenClaw Server started on port ${this.port}`);
+    this.server.on('error', (error) => {
+      console.error('HTTP Server error:', error);
+    });
   }
 
-  private handleMessage(ws: WebSocket, message: WebSocket.RawData): void {
-    try {
-      const messageStr = typeof message === 'string' ? message : message.toString();
-      const parsedMessage: GatewayMessage = JSON.parse(messageStr);
+  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const url = new URL(req.url || '', `http://${req.headers.host}`);
+    const path = url.pathname;
+    const method = req.method?.toLowerCase();
 
-      if (parsedMessage.type === 'req' && parsedMessage.id && parsedMessage.method) {
-        this.handleRequest(ws, parsedMessage);
-      }
-    } catch (error) {
-      console.error('Error parsing message:', error);
-      this.sendError(ws, 'INVALID_JSON', 'Failed to parse JSON message');
-    }
-  }
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  private handleRequest(ws: WebSocket, message: GatewayMessage): void {
-    const { id, method, params } = message;
-
-    if (!id) {
-      this.sendError(ws, 'MISSING_ID', 'Request ID is required');
+    if (method === 'options') {
+      res.writeHead(200);
+      res.end();
       return;
     }
 
-    switch (method) {
-      case 'connect':
-        this.handleConnect(ws, id);
-        break;
-      case 'skills.list':
-        this.handleSkillsList(ws, id);
-        break;
-      case 'skills.status':
-        this.handleSkillsStatus(ws, id, params);
-        break;
-      case 'skills.install':
-        this.handleSkillsInstall(ws, id, params);
-        break;
-      case 'skills.uninstall':
-        this.handleSkillsUninstall(ws, id, params);
-        break;
-      case 'skills.update':
-        this.handleSkillsUpdate(ws, id, params);
-        break;
-      case 'gateway.status':
-        this.handleGatewayStatus(ws, id);
-        break;
-      default:
-        this.sendError(ws, 'UNKNOWN_METHOD', `Method ${method} not supported`);
+    try {
+      const body = await this.parseRequestBody(req);
+      const params = body;
+
+      switch (path) {
+        case '/connect':
+          this.handleConnect(res);
+          break;
+        case '/skills/list':
+          this.handleSkillsList(res);
+          break;
+        case '/skills/status':
+          this.handleSkillsStatus(res, params);
+          break;
+        case '/skills/install':
+          this.handleSkillsInstall(res, params);
+          break;
+        case '/skills/uninstall':
+          this.handleSkillsUninstall(res, params);
+          break;
+        case '/skills/update':
+          this.handleSkillsUpdate(res, params);
+          break;
+        case '/gateway/status':
+          this.handleGatewayStatus(res);
+          break;
+        default:
+          this.sendError(res, 'UNKNOWN_METHOD', `Path ${path} not supported`, 404);
+      }
+    } catch (error) {
+      console.error('Error handling request:', error);
+      this.sendError(res, 'INTERNAL_ERROR', 'Internal server error', 500);
     }
   }
 
-  private handleConnect(ws: WebSocket, id: string): void {
-    // Simple connect handling - no authentication for now
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: {
-        success: true,
-        protocol: 3
-      }
-    };
-
-    ws.send(JSON.stringify(response));
+  private parseRequestBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk) => {
+        data += chunk.toString();
+      });
+      req.on('end', () => {
+        try {
+          resolve(data ? JSON.parse(data) : {});
+        } catch {
+          resolve({});
+        }
+      });
+      req.on('error', reject);
+    });
   }
 
-  private handleSkillsList(ws: WebSocket, id: string): void {
+  private handleConnect(res: http.ServerResponse): void {
+    const response = {
+      success: true,
+      protocol: 3
+    };
+
+    res.writeHead(200);
+    res.end(JSON.stringify(response));
+  }
+
+  private handleSkillsList(res: http.ServerResponse): void {
     const skillsList = Array.from(this.skills.values());
 
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: skillsList
-    };
-
-    ws.send(JSON.stringify(response));
+    res.writeHead(200);
+    res.end(JSON.stringify(skillsList));
   }
 
-  private handleSkillsStatus(ws: WebSocket, id: string, params?: Record<string, unknown>): void {
+  private handleSkillsStatus(res: http.ServerResponse, params?: Record<string, unknown>): void {
     const agentId = params?.agentId as string;
     
-    // For now, return all skills status regardless of agentId
     const skillsStatus: SkillStatus[] = Array.from(this.skills.values()).map(skill => ({
       skillKey: skill.skillKey,
       name: skill.name,
@@ -134,30 +130,24 @@ class OpenClawServer {
       skills: skillsStatus
     };
 
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result
-    };
-
-    ws.send(JSON.stringify(response));
+    res.writeHead(200);
+    res.end(JSON.stringify(result));
   }
 
-  private handleSkillsInstall(ws: WebSocket, id: string, params?: Record<string, unknown>): void {
+  private handleSkillsInstall(res: http.ServerResponse, params?: Record<string, unknown>): void {
     const skillKey = params?.skillKey as string;
     const version = params?.version as string || '1.0.0';
 
     if (!skillKey) {
-      this.sendError(ws, 'MISSING_PARAMS', 'skillKey is required');
+      this.sendError(res, 'MISSING_PARAMS', 'skillKey is required', 400);
       return;
     }
 
     if (this.skills.has(skillKey)) {
-      this.sendError(ws, 'SKILL_ALREADY_INSTALLED', `Skill ${skillKey} is already installed`);
+      this.sendError(res, 'SKILL_ALREADY_INSTALLED', `Skill ${skillKey} is already installed`, 409);
       return;
     }
 
-    // Create a new skill
     const newSkill: Skill = {
       skillKey,
       name: skillKey.charAt(0).toUpperCase() + skillKey.slice(1).replace('-', ' '),
@@ -169,121 +159,104 @@ class OpenClawServer {
 
     this.skills.set(skillKey, newSkill);
 
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: {
-        success: true,
-        skill: newSkill
-      }
+    const response = {
+      success: true,
+      skill: newSkill
     };
 
-    ws.send(JSON.stringify(response));
+    res.writeHead(201);
+    res.end(JSON.stringify(response));
   }
 
-  private handleSkillsUninstall(ws: WebSocket, id: string, params?: Record<string, unknown>): void {
+  private handleSkillsUninstall(res: http.ServerResponse, params?: Record<string, unknown>): void {
     const skillKey = params?.skillKey as string;
 
     if (!skillKey) {
-      this.sendError(ws, 'MISSING_PARAMS', 'skillKey is required');
+      this.sendError(res, 'MISSING_PARAMS', 'skillKey is required', 400);
       return;
     }
 
     if (!this.skills.has(skillKey)) {
-      this.sendError(ws, 'SKILL_NOT_FOUND', `Skill ${skillKey} not found`);
+      this.sendError(res, 'SKILL_NOT_FOUND', `Skill ${skillKey} not found`, 404);
       return;
     }
 
     this.skills.delete(skillKey);
 
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: {
-        success: true,
-        message: `Skill ${skillKey} uninstalled successfully`
-      }
+    const response = {
+      success: true,
+      message: `Skill ${skillKey} uninstalled successfully`
     };
 
-    ws.send(JSON.stringify(response));
+    res.writeHead(200);
+    res.end(JSON.stringify(response));
   }
 
-  private handleSkillsUpdate(ws: WebSocket, id: string, params?: Record<string, unknown>): void {
+  private handleSkillsUpdate(res: http.ServerResponse, params?: Record<string, unknown>): void {
     const skillKey = params?.skillKey as string;
     const enabled = params?.enabled as boolean;
 
     if (!skillKey) {
-      this.sendError(ws, 'MISSING_PARAMS', 'skillKey is required');
+      this.sendError(res, 'MISSING_PARAMS', 'skillKey is required', 400);
       return;
     }
 
     const skill = this.skills.get(skillKey);
     if (!skill) {
-      this.sendError(ws, 'SKILL_NOT_FOUND', `Skill ${skillKey} not found`);
+      this.sendError(res, 'SKILL_NOT_FOUND', `Skill ${skillKey} not found`, 404);
       return;
     }
 
-    // Update skill properties
     if (enabled !== undefined) {
       skill.enabled = enabled;
     }
 
     this.skills.set(skillKey, skill);
 
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: {
-        success: true,
-        skill
-      }
+    const response = {
+      success: true,
+      skill
     };
 
-    ws.send(JSON.stringify(response));
+    res.writeHead(200);
+    res.end(JSON.stringify(response));
   }
 
-  private handleGatewayStatus(ws: WebSocket, id: string): void {
-    const response: GatewayMessage = {
-      type: 'res',
-      id,
-      result: {
-        status: 'ok',
-        version: '1.0.0',
-        uptime: process.uptime(),
-        timestamp: Date.now()
-      }
+  private handleGatewayStatus(res: http.ServerResponse): void {
+    const response = {
+      status: 'ok',
+      version: '1.0.0',
+      uptime: process.uptime(),
+      timestamp: Date.now()
     };
 
-    ws.send(JSON.stringify(response));
+    res.writeHead(200);
+    res.end(JSON.stringify(response));
   }
 
-  private sendError(ws: WebSocket, code: string, message: string, id?: string): void {
-    const errorResponse: GatewayMessage = {
-      type: 'res',
-      id: id,
+  private sendError(res: http.ServerResponse, code: string, message: string, statusCode: number = 400): void {
+    const errorResponse = {
       error: {
         code,
         message
       }
     };
 
-    ws.send(JSON.stringify(errorResponse));
+    res.writeHead(statusCode);
+    res.end(JSON.stringify(errorResponse));
   }
 
   public close(): void {
-    this.wss.close();
-    console.log('OpenClaw Server closed');
+    this.server.close();
+    console.log('OpenClaw HTTP Server closed');
   }
 }
 
-// Export the server class
 export { OpenClawServer };
 
-// If this file is run directly, start the server
 if (require.main === module) {
   const server = new OpenClawServer();
 
-  // Handle graceful shutdown
   process.on('SIGINT', () => {
     server.close();
     process.exit(0);
